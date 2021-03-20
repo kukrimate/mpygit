@@ -1,5 +1,6 @@
+import binascii
 import configparser
-from pathlib import Path
+import pathlib
 import re
 import zlib
 
@@ -7,9 +8,29 @@ class Blob:
     def __init__(self, data):
         self.data = data
 
+class TreeEntry:
+    def __init__(self, name, mode, oid):
+        self.name = name
+        self.mode = mode
+        self.oid = oid
+
+    def __repr__(self):
+        return f"({self.name}  {self.mode} {self.oid})"
+
 class Tree:
     def __init__(self, data):
-        pass
+        self.entries = []
+
+        while len(data) > 0:
+            meta, rest = data.split(b"\x00", 1)
+            meta = meta.decode()
+            mode, name = meta.split(" ", 1)
+            self.entries.append(
+                TreeEntry(name, mode, binascii.hexlify(rest[:20]).decode()))
+            data = rest[20:]
+
+    def __repr__(self):
+        return f"Tree{repr(self.entries)}"
 
 class CommitStamp:
     def __init__(self, val):
@@ -17,38 +38,44 @@ class CommitStamp:
         m = re.match(r"([\s\S]*) \<([\s\S]*)\> ([\s\S]*) ([\s\S]*)", val)
         # Make sure the format was correct
         assert m != None
-
         self.name, self.email, self.timestamp, self.tz = \
             m.group(1), m.group(2), m.group(3), m.group(4)
 
-        def __repr__(self):
-            return f"{self.name} <{self.email}> {self.timestamp} {self.tz}"
-        def __str__(self):
-            return repr(self)
+    def __repr__(self):
+        return f"{self.name} <{self.email}>"
 
 class Commit:
     def __init__(self, data):
         data_str = data.decode()
         lines = data_str.split("\n")
+        if lines[-1] == "":
+            lines.pop(-1)
+
+        # Create list for parent commits
+        self.parents = []
+
+        # Parse metadata
         for i, line in enumerate(lines):
-            if line == "": # blank line for commit msg
+            if line == "":
                 self.message = "\n".join(lines[i+1:])
                 break
+
             key, val = line.split(" ", 1)
             if key == "tree":
                 self.tree = val
+            elif key == "parent":
+                self.parents.append(val)
             elif key == "author":
                 self.author = CommitStamp(val)
             elif key == "committer":
                 self.committer = CommitStamp(val)
+
     def __repr__(self):
-        pass
-    def __str__(self):
-        return repr(self)
+        return f"{self.author} {self.message}"
 
 class Repository:
     def __init__(self, path):
-        self.path = Path(path)
+        self.path = pathlib.Path(path)
 
     @property
     def config(self):
@@ -85,17 +112,21 @@ class Repository:
     def __getitem__(self, key):
         """Lookup an object ID in the repository"""
         obj_path = self.path / "objects" / key[:2] / key[2:]
-        obj_hdr, obj_data = zlib.decompress(obj_path.read_bytes()).split(b"\x00")
+        obj_hdr, obj_data = zlib.decompress(obj_path.read_bytes()).split(b"\x00", 1)
         obj_type, obj_size = obj_hdr.split(b" ")
+
         if obj_type == b"blob":
             return Blob(obj_data)
         elif obj_type == b"tree":
-            return Commit(obj_data)
+            return Tree(obj_data)
         elif obj_type == b"commit":
             return Commit(obj_data)
+
         return None
 
 
 repo = Repository(".git")
 c = repo[repo.heads["master"]]
-
+print(c.tree)
+t = repo[c.tree]
+print(t)
