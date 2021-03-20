@@ -1,3 +1,6 @@
+# Read only, pure Python git implementation
+# Author: Mate Kukri
+
 import binascii
 import configparser
 import pathlib
@@ -83,17 +86,38 @@ class Repository:
         config.read(self.path / "config")
         return config
 
+    def _read_packed_refs(self, tgt_dict, want):
+        packed_refs_path = self.path / "packed-refs"
+
+        # Return if packed references file is empty
+        if not packed_refs_path.exists():
+            return
+
+        for line in packed_refs_path.read_text().split("\n"):
+            # Skip empty lines and comments
+            if line == "" or line[0] == "#":
+                continue
+
+            # Add packed reference if desired
+            val, key = line.split(" ", 1)
+            if key.startswith(want):
+                tgt_dict[key[len(want):]] = val
+
     @property
     def tags(self):
         """List of tags"""
-        return { ref.name : ref.read_text().strip()
+        tags = { ref.name : ref.read_text().strip()
                  for ref in (self.path / "refs" / "tags").iterdir() }
+        self._read_packed_refs(tags, "refs/tags/")
+        return tags
 
     @property
     def heads(self):
         """List of heads (aka branches)"""
-        return { ref.name : ref.read_text().strip()
+        heads = { ref.name : ref.read_text().strip()
                  for ref in (self.path / "refs" / "heads").iterdir() }
+        self._read_packed_refs(heads, "refs/heads/")
+        return heads
 
     @property
     def HEAD(self):
@@ -126,6 +150,7 @@ class Repository:
 
 
 repo = Repository(".git")
+print(repo.heads)
 c = repo[repo.heads["master"]]
 print(c.tree)
 t = repo[c.tree]
