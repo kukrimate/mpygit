@@ -5,6 +5,7 @@ import binascii
 import configparser
 import pathlib
 import re
+import struct
 import zlib
 
 class Blob:
@@ -76,9 +77,89 @@ class Commit:
     def __repr__(self):
         return f"{self.author} {self.message}"
 
+class PackFile:
+    def __init__(self, idxpath, packpath):
+        self.idxpath = pathlib.Path(idxpath)
+        self.packpath = pathlib.Path(packpath)
+
+        # Load pack index
+        # Please note that for now we only support the v2 idx format
+        with self.idxpath.open("rb") as idxfile:
+            # Check magic number
+            assert idxfile.read(4) == b"\377tOc"
+            # Check version number
+            assert idxfile.read(4) == b"\x00\x00\x00\x02"
+            # Read fan-out table
+            self.fanout = struct.unpack(">256I", idxfile.read(256 * 4))
+            # Read entries
+            entry_cnt = self.fanout[-1]
+            hashes = idxfile.read(entry_cnt * 20)
+            idxfile.read(entry_cnt * 4) # skip CRCs
+            indices = struct.unpack(f">{entry_cnt}I", idxfile.read(entry_cnt * 4))
+            self.entries = {}
+            for i in range(0, len(hashes), 20):
+                hash_str = binascii.hexlify(hashes[i:i+20]).decode()
+                self.entries[hash_str] = indices[i//20]
+
+
+    def __getitem__(self, oid):
+        """Read an ojbect from the pack file"""
+        obj_offs = self.entries.get(oid, None)
+        if obj_offs == None:
+            return None
+
+        def decode_varint(packfile):
+            """Decoder for git's custom variable length packer"""
+            b = packfile.read(1)[0]
+            obj_type = (b & 0x70) >> 4
+            obj_size = b & 0xf
+            while b & 0x80:
+                b = packfile.read(1)[0]
+                obj_size <<= 7
+                obj_size |= b & 0x7f
+            return obj_type, obj_size
+
+        def decompress_stream(stream, defl_size):
+            """Decompress zlib data from a stream without knowing the
+            compressed size of said data
+            """
+            CHUNK_SIZE = 1024
+            deflator = zlib.decompressobj()
+            defl_data = b""
+            while len(defl_data) < defl_size:
+                chunk = stream.read(CHUNK_SIZE)
+                if chunk == None:
+                    break
+                defl_data += deflator.decompress(chunk)
+                defl_data += deflator.flush()
+            return defl_data
+
+        with self.packpath.open("rb") as packfile:
+            packfile.seek(obj_offs)
+            obj_type, obj_size = decode_varint(packfile)
+
+            assert 0 < obj_type < 5 # TODO: add de-deltifier
+
+            obj_data = decompress_stream(packfile, obj_size)
+            if obj_type == 1:
+                return Commit(obj_data)
+            elif obj_type == 2:
+                return Tree(obj_data)
+            elif obj_type == 3:
+                return Blob(obj_data)
+            else:
+                print("fail")
+
 class Repository:
     def __init__(self, path):
+        # Save repo path
         self.path = pathlib.Path(path)
+        # Read packs
+        self.packs = []
+        packdir = self.path / "objects" / "pack"
+        for idxpath in packdir.glob("*.idx"):
+            pack_name = idxpath.name[:-4] + ".pack"
+            self.packs.append(PackFile(idxpath, packdir / pack_name))
 
     @property
     def config(self):
@@ -101,7 +182,10 @@ class Repository:
             # Add packed reference if desired
             val, key = line.split(" ", 1)
             if key.startswith(want):
-                tgt_dict[key[len(want):]] = val
+                realkey = key[len(want):]
+                # NOTE: packed refs do *not* take precedence over unpacked ones
+                if realkey not in tgt_dict:
+                    tgt_dict[realkey] = val
 
     @property
     def tags(self):
@@ -135,23 +219,30 @@ class Repository:
 
     def __getitem__(self, key):
         """Lookup an object ID in the repository"""
-        obj_path = self.path / "objects" / key[:2] / key[2:]
-        obj_hdr, obj_data = zlib.decompress(obj_path.read_bytes()).split(b"\x00", 1)
-        obj_type, obj_size = obj_hdr.split(b" ")
 
-        if obj_type == b"blob":
-            return Blob(obj_data)
-        elif obj_type == b"tree":
-            return Tree(obj_data)
-        elif obj_type == b"commit":
-            return Commit(obj_data)
+        # Expected location on disk
+        obj_path = self.path / "objects" / key[:2] / key[2:]
+
+        if not obj_path.is_file():
+            # Look for object in packs
+            for pack in self.packs:
+                obj = pack[key]
+                if obj != None:
+                    return obj
+        else:
+            # Found object on disk
+            obj_hdr, obj_data = zlib.decompress(obj_path.read_bytes()).split(b"\x00", 1)
+            obj_type, obj_size = obj_hdr.split(b" ")
+
+            if obj_type == b"blob":
+                return Blob(obj_data)
+            elif obj_type == b"tree":
+                return Tree(obj_data)
+            elif obj_type == b"commit":
+                return Commit(obj_data)
 
         return None
 
 
 repo = Repository(".git")
-print(repo.heads)
-c = repo[repo.heads["master"]]
-print(c.tree)
-t = repo[c.tree]
-print(t)
+print(repo["acd8ee66727840f44fe55299d291436e402cbff7"])
