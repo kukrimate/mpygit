@@ -26,8 +26,10 @@ class Blob:
             self.is_binary = True
 
 S_IFMT = 0o170000
-S_IFDIR = 0o40000  # directory
-S_IFMOD = 0o160000 # submodule
+S_IFDIR = 0o040000  # directory
+S_IFREG = 0o100000  # regular file
+S_IFLNK = 0o120000  # symbolic link
+S_IFMOD = 0o160000  # submodule
 
 class TreeEntry:
     def __init__(self, name, mode, oid):
@@ -36,11 +38,20 @@ class TreeEntry:
         self.oid = oid
 
     def isdir(self):
+        """Is this entry a directory"""
         return (self.mode & S_IFMT) == S_IFDIR
 
-    def issubmod(self):
-        return (self.mode & S_IFMT) == S_IFMOD
+    def isreg(self):
+        """Is this entry a regular file"""
+        return (self.mode & S_IFMT) == S_IFREG
 
+    def islnk(self):
+        """Is this entry a symbolic link"""
+        return (self.mode & S_IFMT) == S_IFLNK
+
+    def issubmod(self):
+        """Is entry a submodule"""
+        return (self.mode & S_IFMT) == S_IFMOD
     def __repr__(self):
         return f"({self.name} {self.mode:o} {self.oid})"
 
