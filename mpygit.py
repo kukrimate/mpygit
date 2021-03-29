@@ -452,7 +452,10 @@ class Repository:
 
         m = re.match(r"ref:\s*(\S*)", sym_ref)
         if m is not None:
-            return m.group(1)
+            refval = m.group(1)
+            # This should always be a reference to a branch
+            assert refval.startswith("refs/heads/")
+            return refval[11:]
         else:
             return sym_ref
 
