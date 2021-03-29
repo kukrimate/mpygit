@@ -18,6 +18,7 @@
 
 import binascii
 import configparser
+import mmap
 import pathlib
 import re
 import struct
@@ -150,6 +151,11 @@ class PackFile:
             assert idxfile.read(4) == b"\x00\x00\x00\x02"
             # Read fan-out table
             self.fanout = struct.unpack(">256I", idxfile.read(256 * 4))
+            # Memory map index file
+            self.idxmm = mmap.mmap(idxfile.fileno(), 0, access=mmap.ACCESS_READ)
+
+    def __del__(self):
+        self.idxmm.close()
 
     def _get_offset(self, oid):
         """Resolve an object ID into an offset into the file"""
@@ -173,24 +179,22 @@ class PackFile:
             return 1032 + self.fanout[-1] * 28 + idx * 8
 
         def compare_hash(h1, h2):
-            idx = 0
-            while idx < 20 and h1[idx] == h2[idx]:
-                idx += 1
-            if idx == 20:
-                return 0
-            if h1[idx] < h2[idx]:
-                return -1
-            else:
-                return 1
+            i = 0
+            while i < 20:
+                if h1[i] < h2[i]:
+                    return -1
+                elif h1[i] > h2[i]:
+                    return 1
+                i += 1
+            return 0
 
-        def bsearch_hash(file):
+        def bsearch_hash():
             left = 0
             right = cnt - 1
             while left <= right:
                 mid = (left + right) // 2
-                idxfile.seek(hash_offs(mid))
-                cur_hash = idxfile.read(20)
-                result = compare_hash(cur_hash, oid_bytes)
+                hoff = hash_offs(mid)
+                result = compare_hash(self.idxmm[hoff:hoff+20], oid_bytes)
                 if result < 0:
                     left = mid + 1
                 elif result > 0:
@@ -199,15 +203,17 @@ class PackFile:
                     return mid
             return None
 
-        with self.idxpath.open("rb") as idxfile:
-            entry_idx = bsearch_hash(idxfile)
-            if entry_idx is None:
-                return None
-            idxfile.seek(entry_off(entry_idx))
-            off, = struct.unpack(">I", idxfile.read(4))
-            if off > 0x7fffffff:
-                idxfile.seek(bigentry_off(off & 0x7fffffff))
-                off, = struct.unpack(">Q", idxfile.read(8))
+        # Find entry index
+        entry_idx = bsearch_hash()
+        if entry_idx is None:
+            return None
+
+        # Get packfile offset for entry
+        eoff = entry_off(entry_idx)
+        off, = struct.unpack(">I", self.idxmm[eoff:eoff+4])
+        if off > 0x7fffffff:
+            boff = bigentry_off(off & 0x7fffffff)
+            off, = struct.unpack(">Q", self.idxmm[boff:boff+8])
 
         return off
 
