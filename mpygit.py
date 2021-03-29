@@ -1,5 +1,6 @@
 #
-# Read only, pure Python git implementation
+# Part of mpygit - mpygit.py - Read only, pure Python git implementation
+#
 # Copyright (C) 2021  Mate Kukri
 #
 # This program is free software: you can redistribute it and/or modify
