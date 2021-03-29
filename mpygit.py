@@ -14,6 +14,7 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
 
 import binascii
 import configparser
@@ -70,7 +71,7 @@ class Tree:
 
         while len(data) > 0:
             meta, rest = data.split(b"\x00", 1)
-            meta = meta.decode()
+            meta = meta.decode("utf-8", errors='ignore')
             mode, name = meta.split(" ", 1)
             self._entries[name] = \
                 TreeEntry(name, int(mode, 8), binascii.hexlify(rest[:20]).decode())
@@ -101,7 +102,7 @@ class Commit:
     def __init__(self, oid, data):
         self.oid = oid
 
-        data_str = data.decode()
+        data_str = data.decode("utf-8", errors='ignore')
         lines = data_str.split("\n")
         if lines[-1] == "":
             lines.pop(-1)
@@ -461,6 +462,12 @@ class Repository:
 
     def __getitem__(self, oid):
         """Lookup an object ID in the repository"""
+
+        # De-alias branch name here
+        if len(oid) != 40:
+            oid = self.heads[oid]
+            if oid is None:
+                return None
 
         # Expected location on disk
         obj_path = self.path / "objects" / oid[:2] / oid[2:]
