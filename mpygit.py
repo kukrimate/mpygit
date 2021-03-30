@@ -132,11 +132,15 @@ class Commit:
     def short_oid(self):
         return self.oid[:8]
 
+    @property
+    def subject(self):
+        return self.message.split("\n", maxsplit=1)[0]
+
     def __lt__(self, other):
         return self.committer.timestamp < other.committer.timestamp
 
     def __repr__(self):
-        return f"{self.author} {self.message}"
+        return f"{self.author} {self.subject}"
 
 class PackFile:
     def __init__(self, idxpath, packpath):

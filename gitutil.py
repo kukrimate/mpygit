@@ -18,6 +18,9 @@
 #
 
 import difflib
+import math
+from mpygit import mpygit
+import heapq
 
 def diff_commits(repo, commit1, commit2):
     """Generate diffs between two commits in a repository"""
@@ -111,3 +114,74 @@ def diff_commits(repo, commit1, commit2):
     else:
         diff_subtree([], repo[commit1.tree], repo[commit2.tree])
     return diffs
+
+def walk(repo, start_oid, limit=math.inf):
+    def heappush_max(heap, item):
+        """Push item onto heap, maintaining the max-heap invariant."""
+        heap.append(item)
+        heapq._siftdown_max(heap, 0, len(heap) - 1)
+
+    # Priority-queue to always have the newest commit
+    commits = [ repo[start_oid] ]
+    # Avoid duplicates when two histories converge
+    visited = set()
+
+    # Process next commit
+    tot = 0
+    while len(commits) > 0 and tot < limit:
+        cur = heapq._heappop_max(commits)
+        # Skip commit if already visited
+        if cur.oid in visited:
+            continue
+        # Mark the current commit as visited
+        visited.add(cur.oid)
+        # Add parents of the current commit
+        for parent in cur.parents:
+            heappush_max(commits, repo[parent])
+        # Yield current commit
+        tot += 1
+        yield cur
+
+def get_latest_change(repo, start_oid, path):
+    def treesame(c1, c2, path):
+        t1 = repo[c1.tree]
+        t2 = repo[c2.tree]
+        for cur in path:
+            if not isinstance(t1, mpygit.Tree) or not isinstance(t2, mpygit.Tree):
+                return False
+            e1 = t1[cur]
+            e2 = t2[cur]
+            if e1 is None or e2 is None:
+                return False
+            if e1.oid == e2.oid:
+                return True
+            t1 = repo[e1.oid]
+            t2 = repo[e2.oid]
+        return False
+
+    def heappush_max(heap, item):
+        heap.append(item)
+        heapq._siftdown_max(heap, 0, len(heap) - 1)
+
+    commits = [ repo[start_oid] ]
+    visited = set()
+
+    while len(commits) > 0:
+        commit = heapq._heappop_max(commits)
+        if commit.oid in visited:
+            continue
+        visited.add(commit.oid)
+
+        non_treesame = []
+        for parent_oid in commit.parents:
+            parent = repo[parent_oid]
+            if treesame(commit, parent, path):
+                heappush_max(commits, parent)
+                non_treesame = []
+                break
+            else:
+                non_treesame.append(parent)
+        for parent in non_treesame:
+            heappush_max(commits, parent)
+        if len(commit.parents) == 0 or len(non_treesame) > 0:
+            return commit
